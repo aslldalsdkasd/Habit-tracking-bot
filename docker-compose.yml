@@ -1,0 +1,39 @@
+services:
+  api:
+    container_name: api
+    restart: always
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE: api
+    volumes:
+      - data_api:/app/db
+    ports:
+      - "8080:6000"
+    command: ["uvicorn", "fastapi_client.api.main_fast:app", "--host", "0.0.0.0", "--port", "6000"]
+    networks:
+      - app_networks
+
+  telegram:
+    container_name: telegram
+    restart: always
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE: telegram
+    command:
+      - "python"
+      - "-m"
+      - "telegram.main"
+    depends_on:
+      - api
+    networks:
+      - app_networks
+volumes:
+  data_api:
+
+networks:
+  app_networks:
+    driver: bridge
