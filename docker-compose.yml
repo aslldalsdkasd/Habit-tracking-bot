@@ -1,0 +1,120 @@
+version: '3.8'
+
+services:
+  redis:
+    container_name: redis
+    restart: always
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    networks:
+      - app_networks
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  db:
+    container_name: db
+    restart: always
+    image: postgres:15
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin
+      POSTGRES_DB: habit_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - postgres_log:/var/lib/postgresql/log
+    ports:
+      - "5432:5432"
+    networks:
+      - app_networks
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d habit_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    container_name: api
+    restart: always
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:6000"
+    command: sh -c 'uvicorn fastapi_client.api.main_fast:app --host 0.0.0.0 --port 6000'
+    networks:
+      - app_networks
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql://admin:admin@db:5432/habit_db
+      - REDIS_URL=redis://redis:6379/0
+
+  celery_worker:
+    container_name: celery_worker
+    restart: always
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: sh -c 'celery -A celery_client.init_celery worker --loglevel=info --pool=solo'
+    networks:
+      - app_networks
+    depends_on:
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql://admin:admin@db:5432/habit_db
+      - REDIS_URL=redis://redis:6379/0
+      - BOT_TOKEN=${BOT_TOKEN}
+      - GROUP_ID=${GROUP_ID}
+
+  celery_beat:
+    container_name: celery_beat
+    restart: always
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: sh -c "rm -f /tmp/celerybeat-schedule* && celery -A celery_client.init_celery beat --loglevel=info --schedule=/tmp/celerybeat-schedule"
+    networks:
+      - app_networks
+    depends_on:
+      - redis
+      - db
+    environment:
+      - DATABASE_URL=postgresql://admin:admin@db:5432/habit_db
+      - REDIS_URL=redis://redis:6379/0
+      - BOT_TOKEN=${BOT_TOKEN}
+      - GROUP_ID=${GROUP_ID}
+
+  vk:
+    container_name: vk
+    restart: always
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: sh -c 'python -m vk.main'
+    depends_on:
+      - api
+      - celery_worker
+    networks:
+      - app_networks
+    environment:
+      - GROUP_ID=${GROUP_ID}
+      - BOT_TOKEN=${BOT_TOKEN}
+      - DATABASE_URL=postgresql://admin:admin@db:5432/habit_db
+      - REDIS_URL=redis://redis:6379/0
+
+volumes:
+  postgres_data:
+  postgres_log:
+
+
+networks:
+  app_networks:
+    driver: bridge
